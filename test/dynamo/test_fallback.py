@@ -1,6 +1,7 @@
 import torch
 import torch_xla
 import torch_xla.core.xla_model as xm
+import torch_xla.debug.metrics as met
 import torch._dynamo as dynamo
 import torch._dynamo.test_case as dt
 
@@ -15,16 +16,27 @@ class XlaDynamoFallbackTest(dt.TestCase):
       return torch.add(B, mat2)
 
     dynamo_fn = torch.compile(fn_fallback, backend="torchxla_trace_once")
+    # first execution
     M = torch.randn(5, 10)
     mat1 = torch.randn(5, 10)
     mat2 = torch.randn(5, 10)
     xla_M = M.to(xm.xla_device())
     xla_mat1 = mat1.to(xm.xla_device())
     xla_mat2 = mat2.to(xm.xla_device())
-
     cpu_res = fn_fallback(M, mat1, mat2)
     xla_res = dynamo_fn(xla_M, xla_mat1, xla_mat2)
-
+    self.assertIn('xla::add', met.counter_names())
+    self.assertTrue(torch.allclose(cpu_res, xla_res.cpu()))
+    # second execution
+    M = torch.randn(5, 10)
+    mat1 = torch.randn(5, 10)
+    mat2 = torch.randn(5, 10)
+    xla_M = M.to(xm.xla_device())
+    xla_mat1 = mat1.to(xm.xla_device())
+    xla_mat2 = mat2.to(xm.xla_device())
+    cpu_res = fn_fallback(M, mat1, mat2)
+    xla_res = dynamo_fn(xla_M, xla_mat1, xla_mat2)
+    self.assertNotIn('xla::add', met.counter_names())
     self.assertTrue(torch.allclose(cpu_res, xla_res.cpu()))
 
   def test_operator_operand_fallback(self):
