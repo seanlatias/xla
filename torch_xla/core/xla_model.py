@@ -37,11 +37,8 @@ _ORDINAL = None
 def _init_world_size_ordinal():
   global _WORLD_SIZE, _ORDINAL
 
-  if not pjrt.using_pjrt():
-    return
-
-  # We don't support V3-8. See Note [V3-8 Threading]
-  if pjrt.device_type() == 'TPU' and tpu.version() < 4:
+  # Dynamo doesn't support XRT or multithreaded PJRT. See Note [V3-8 Threading]
+  if not pjrt.using_pjrt() or pjrt.addressable_device_count() > 1:
     return
 
   if _WORLD_SIZE is None:
@@ -466,7 +463,7 @@ def all_reduce(reduce_type, inputs, scale=1.0, groups=None, pin_layout=True):
     pin_layout (bool, optional): whether to pin the layout for this communication op.
       Layout pining can prevent potential data corruption when each process that
       participate in the communication has slightly different program, but it might
-      cause some xla compiation to fail. Unpin the layout when you see error message
+      cause some xla compilation to fail. Unpin the layout when you see error message
       like "HloModule has a mix of layout constrained".
 
   Returns:
@@ -514,7 +511,7 @@ def _all_gather_using_all_reduce(value, dim=0, groups=None, pin_layout=True):
     pin_layout (bool, optional): whether to pin the layout for this communication op.
       Layout pining can prevent potential data corruption when each process that
       participate in the communication has slightly different program, but it might
-      cause some xla compiation to fail. Unpin the layout when you see error message
+      cause some xla compilation to fail. Unpin the layout when you see error message
       like "HloModule has a mix of layout constrained".
 
   Returns:
@@ -556,7 +553,7 @@ def all_gather(value, dim=0, groups=None, output=None, pin_layout=True):
     pin_layout (bool, optional): whether to pin the layout for this communication op.
       Layout pining can prevent potential data corruption when each process that
       participate in the communication has slightly different program, but it might
-      cause some xla compiation to fail. Unpin the layout when you see error message
+      cause some xla compilation to fail. Unpin the layout when you see error message
       like "HloModule has a mix of layout constrained".
 
   Returns:
@@ -615,7 +612,7 @@ def all_to_all(value,
     pin_layout (bool, optional): whether to pin the layout for this communication op.
       Layout pining can prevent potential data corruption when each process that
       participate in the communication has slightly different program, but it might
-      cause some xla compiation to fail. Unpin the layout when you see error message
+      cause some xla compilation to fail. Unpin the layout when you see error message
       like "HloModule has a mix of layout constrained".
 
   Returns:
@@ -671,7 +668,7 @@ def collective_broadcast(tensors: List[torch.Tensor],
     pin_layout (bool, optional): whether to pin the layout for this communication op.
       Layout pining can prevent potential data corruption when each process that
       participate in the communication has slightly different program, but it might
-      cause some xla compiation to fail. Unpin the layout when you see error message
+      cause some xla compilation to fail. Unpin the layout when you see error message
       like "HloModule has a mix of layout constrained".
   """
   with torch.no_grad():
@@ -748,11 +745,11 @@ def reduce_scatter(reduce_type,
     pin_layout (bool, optional): whether to pin the layout for this communication op.
       Layout pining can prevent potential data corruption when each process that
       participate in the communication has slightly different program, but it might
-      cause some xla compiation to fail. Unpin the layout when you see error message
+      cause some xla compilation to fail. Unpin the layout when you see error message
       like "HloModule has a mix of layout constrained".
 
   Returns:
-    A `torch.Tensor` with all the values reduced accross replicas. Each process
+    A `torch.Tensor` with all the values reduced across replicas. Each process
     gets a shard split along the `scatter_dim`. All other dimensions are
     the same as the input.
   """

@@ -1,6 +1,12 @@
 #include <Python.h>
 #include <c10/core/Device.h>
 #include <c10/util/Optional.h>
+#include <torch/csrc/autograd/utils/wrap_outputs.h>
+#include <torch/csrc/autograd/variable.h>
+#include <torch/csrc/jit/python/pybind.h>
+#include <torch/csrc/lazy/core/config.h>
+#include <torch/csrc/lazy/core/ir_util.h>
+#include <torch/csrc/lazy/core/lazy_graph_executor.h>
 
 #include <cstring>
 #include <sstream>
@@ -39,16 +45,10 @@
 #include "third_party/xla_client/thread_pool.h"
 #include "third_party/xla_client/util.h"
 #include "third_party/xla_client/xla_util.h"
-#include "torch/csrc/autograd/utils/wrap_outputs.h"
-#include "torch/csrc/autograd/variable.h"
-#include "torch/csrc/jit/python/pybind.h"
-#include "torch/csrc/lazy/core/config.h"
-#include "torch/csrc/lazy/core/ir_util.h"
-#include "torch/csrc/lazy/core/lazy_graph_executor.h"
+#include "torch_xla/csrc/XLANativeFunctions.h"
 #include "torch_xla/csrc/aten_xla_bridge.h"
 #include "torch_xla/csrc/computation.h"
 #include "torch_xla/csrc/device.h"
-#include "torch_xla/csrc/generated/XLANativeFunctions.h"
 #include "torch_xla/csrc/helpers.h"
 #include "torch_xla/csrc/ir.h"
 #include "torch_xla/csrc/ir_dump_util.h"
@@ -833,7 +833,7 @@ void BuildProfilerSubmodule(py::module* m) {
           }
         }
         if (!status.ok()) {
-          PyErr_SetString(PyExc_RuntimeError, status.error_message());
+          PyErr_SetString(PyExc_RuntimeError, std::string(status.message()));
           throw py::error_already_set();
         }
       },
@@ -1475,6 +1475,8 @@ void InitXlaModuleBindings(py::module m) {
                                  const py::list& tile_assignment,
                                  bool replicated = false, bool manual = false) {
     TORCH_LAZY_COUNTER("XlaMarkSharding", 1);
+    XLA_CHECK(ShardingUtil::UseVirtualDevice())
+        << "Please set `XLA_USE_SPMD=1`";
     XLATensorPtr xtensor = bridge::GetXlaTensor(input);
     xla::OpSharding sharding =
         ShardingUtil::CreateOpSharding(tile_assignment, replicated, manual);
@@ -1484,8 +1486,7 @@ void InitXlaModuleBindings(py::module m) {
                       static_cast<XlaDeviceType>(xtensor->GetDevice().type())));
 
     at::Tensor cpu_tensor;
-    if (xla::sys_util::GetEnvBool("XLA_USE_SPMD", false) &&
-        xtensor->CurrentTensorData().has_value()) {
+    if (xtensor->CurrentTensorData().has_value()) {
       TORCH_LAZY_COUNTER("VirtualDeviceUsage", 1);
       // When virtual device is enabled for SPMD, we defer the initial data
       // transfer to the device and retain the original data on the host, until
@@ -1625,7 +1626,8 @@ void InitXlaModuleBindings(py::module m) {
 
   // -------------Dynamo Integration API Start-------------------------
   /*
-   * Return tensor ids and tensors for DeviceData nodes.
+   * Return tensor ids and at::tensors for all DeviceData nodes that is needed
+   * to compute the value of tensors.
    */
   m.def("_get_tensors_xla_device_data_node",
         [](const std::vector<at::Tensor>& tensors)

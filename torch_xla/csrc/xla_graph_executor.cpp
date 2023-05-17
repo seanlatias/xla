@@ -1,6 +1,14 @@
 #include "torch_xla/csrc/xla_graph_executor.h"
 
 #include <Python.h>
+#include <torch/csrc/autograd/variable.h>
+#include <torch/csrc/lazy/core/hash.h>
+#include <torch/csrc/lazy/core/helpers.h>
+#include <torch/csrc/lazy/core/ir_util.h>
+#include <torch/csrc/lazy/core/lazy_graph_executor.h>
+#include <torch/csrc/lazy/core/metrics.h>
+#include <torch/csrc/lazy/core/tensor_util.h>
+#include <torch/csrc/lazy/core/util.h>
 
 #include <algorithm>
 #include <cmath>
@@ -26,14 +34,6 @@
 #include "third_party/xla_client/thread_pool.h"
 #include "third_party/xla_client/unique.h"
 #include "third_party/xla_client/xla_util.h"
-#include "torch/csrc/autograd/variable.h"
-#include "torch/csrc/lazy/core/hash.h"
-#include "torch/csrc/lazy/core/helpers.h"
-#include "torch/csrc/lazy/core/ir_util.h"
-#include "torch/csrc/lazy/core/lazy_graph_executor.h"
-#include "torch/csrc/lazy/core/metrics.h"
-#include "torch/csrc/lazy/core/tensor_util.h"
-#include "torch/csrc/lazy/core/util.h"
 #include "torch_xla/csrc/aten_xla_bridge.h"
 #include "torch_xla/csrc/computation.h"
 #include "torch_xla/csrc/helpers.h"
@@ -282,6 +282,13 @@ torch::lazy::Value XLAGraphExecutor::GetIrValueForScalar(
   return GetIrValueForScalar(value, type, shape.dimensions(), device);
 }
 
+torch::lazy::Value XLAGraphExecutor::GetIrValueForScalar(
+    const at::Scalar& value, SymIntElements size_elements,
+    xla::PrimitiveType type, const torch::lazy::BackendDevice& device) {
+  torch::lazy::Value ir_value = GetIrValueForScalar(value, type, device);
+  return torch::lazy::MakeNode<ExpandSymInt>(ir_value, size_elements);
+}
+
 torch::lazy::Value XLAGraphExecutor::GetRngSeed(
     const torch::lazy::BackendDevice& device) {
   return DeviceContextArena::Get()->GetRngSeed(device);
@@ -454,14 +461,21 @@ void XLAGraphExecutor::ClearPendingIrs(
     if (tensor_ids.insert(tensors[i]->GetUniqueId()).second &&
         tensors[i]->CurrentDataHandle() == nullptr) {
       torch::lazy::Value ir_value = tensors[i]->CurrentIrValue();
+      // Only clear the IR that is not a DeviceData Node.
       if (ir_value) {
-        xla::Shape shape = MakeShapeWithDeviceLayout(
-            tensors[i]->shape(), static_cast<XlaDeviceType>(device.type()));
-        torch::lazy::BackendDataPtr handle =
-            WrapXlaData(xla::ComputationClient::Get()->CreateDataPlaceholder(
-                device.toString(), std::move(shape)));
+        DeviceData* device_data =
+            torch_xla::DeviceData::Cast(ir_value.node.get());
+        if (device_data != nullptr) {
+          tensors[i]->data()->handle = device_data->data();
+        } else {
+          xla::Shape shape = MakeShapeWithDeviceLayout(
+              tensors[i]->shape(), static_cast<XlaDeviceType>(device.type()));
+          torch::lazy::BackendDataPtr handle =
+              WrapXlaData(xla::ComputationClient::Get()->CreateDataPlaceholder(
+                  device.toString(), std::move(shape)));
+          tensors[i]->data()->handle = handle;
+        }
         tensors[i]->AssignIrValue(torch::lazy::Value());
-        tensors[i]->data()->handle = handle;
         tensors[i]->data()->view = nullptr;
         tensors[i]->data()->tensor_data = c10::nullopt;
       }
@@ -872,11 +886,16 @@ void XLAGraphExecutor::ExtractIRAndPrepareXlaData_(
     torch::lazy::BackendDataPtr handle =
         WrapXlaData(xla::ComputationClient::Get()->CreateDataPlaceholder(
             tensor_device.toString(), std::move(shape)));
-    // Create sharded data placeholder, this will be used to
-    // hold the corresponding computation results.
-    if (tensor->sharding_spec()) {
+    if (ShardingUtil::UseVirtualDevice()) {
+      // Create sharded data placeholder, this will be used to
+      // hold the corresponding computation results.
       auto sharding = tensor->sharding_spec();
-      if (!sharding->shape.has_value()) {
+      if (!sharding) {
+        // Implicitly replicate tensors without a user-provided sharding
+        // annotation.
+        sharding = std::make_shared<XLATensor::ShardingSpec>(
+            xla::HloSharding::Replicate().ToProto(), tensor->shape());
+      } else if (!sharding->shape.has_value()) {
         sharding->shape = tensor->shape();
       }
       handle = WrapXlaData(xla::ComputationClient::Get()->WrapDataShards(

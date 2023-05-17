@@ -1,9 +1,11 @@
-#pragma once
+#ifndef XLA_TORCH_XLA_CSRC_XLA_SHARDING_UTIL_H_
+#define XLA_TORCH_XLA_CSRC_XLA_SHARDING_UTIL_H_
+
+#include <torch/csrc/jit/python/pybind.h>
 
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/client/xla_computation.h"
 #include "tensorflow/compiler/xla/service/hlo.pb.h"
-#include "torch/csrc/jit/python/pybind.h"
 #include "torch_xla/csrc/ir.h"
 #include "torch_xla/csrc/lowering_context.h"
 #include "torch_xla/csrc/tensor.h"
@@ -12,6 +14,10 @@ namespace torch_xla {
 
 class ShardingUtil {
  public:
+  // Test whether the XLA_USE_SPMD environment variable is set to enable the
+  // virtual device optimization.
+  static bool UseVirtualDevice();
+
   // Annotates HLO instructions in the lowered computation and returns true if
   // the computation needs to be compiled with SPMD partitioning. For this call
   // to be effective, this needs to be called after the lowering and before
@@ -62,6 +68,20 @@ class ShardingUtil {
       std::vector<XLATensor::ShardingSpecPtr> sharding_specs,
       bool replicated_output = true);
 
+  // Returns the shape of the resulting shards of `tensor` after applying
+  // `sharding`. This assumes the shards will be padded to ensure they all
+  // have the same shape.
+  static std::vector<int64_t> GetShardShape(const at::Tensor& tensor,
+                                            const xla::OpSharding sharding);
+
+  // Uses the provided `sharding` spec and expected shard shape to determine the
+  // index slices for the shards which belong on `devices`. Only supports
+  // `REPLICATED` and `OTHER` sharding types.
+  static std::vector<std::vector<at::indexing::TensorIndex>>
+  GetShardIndicesForDevices(const std::vector<int64_t>& shard_shape,
+                            const xla::OpSharding sharding,
+                            const std::vector<std::string>& devices);
+
   // Shards a tensor and returns the sharded tensors which belong on `devices`
   // based on the `sharding` spec. REPLICATED sharding should result in shards
   // identical to the input; OTHERS (tiled) sharding result in shards where
@@ -77,3 +97,5 @@ class ShardingUtil {
 };
 
 }  // namespace torch_xla
+
+#endif  // XLA_TORCH_XLA_CSRC_XLA_SHARDING_UTIL_H_

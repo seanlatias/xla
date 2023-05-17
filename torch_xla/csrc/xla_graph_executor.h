@@ -1,11 +1,15 @@
-#pragma once
+#ifndef XLA_TORCH_XLA_CSRC_XLA_GRAPH_EXECUTOR_H_
+#define XLA_TORCH_XLA_CSRC_XLA_GRAPH_EXECUTOR_H_
+
+#include <c10/core/SymNodeImpl.h>
+#include <torch/csrc/autograd/variable.h>
+#include <torch/csrc/lazy/core/ir_util.h>
 
 #include <iostream>
 #include <memory>
 #include <string>
 #include <unordered_map>
 
-#include "c10/core/SymNodeImpl.h"
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/status.h"
 #include "tensorflow/compiler/xla/types.h"
@@ -14,8 +18,6 @@
 #include "third_party/xla_client/computation_client.h"
 #include "third_party/xla_client/multi_wait.h"
 #include "third_party/xla_client/util.h"
-#include "torch/csrc/autograd/variable.h"
-#include "torch/csrc/lazy/core/ir_util.h"
 #include "torch_xla/csrc/computation.h"
 #include "torch_xla/csrc/cross_replica_reduces.h"
 #include "torch_xla/csrc/debug_util.h"
@@ -86,6 +88,9 @@ class XLAGraphExecutor : public torch::lazy::LazyGraphExecutor {
       const at::Scalar& value, const xla::Shape& shape,
       c10::optional<at::ScalarType> logical_element_type,
       const torch::lazy::BackendDevice& device);
+  torch::lazy::Value GetIrValueForScalar(
+      const at::Scalar& value, SymIntElements size_elements,
+      xla::PrimitiveType type, const torch::lazy::BackendDevice& device);
 
   // Override to use our own DeviceContextArena.
   torch::lazy::Value GetRngSeed(const torch::lazy::BackendDevice& device) final;
@@ -346,3 +351,5 @@ class XLAGraphExecutor : public torch::lazy::LazyGraphExecutor {
 };
 
 }  // namespace torch_xla
+
+#endif  // XLA_TORCH_XLA_CSRC_XLA_GRAPH_EXECUTOR_H_
